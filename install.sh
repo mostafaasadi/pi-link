@@ -9,7 +9,7 @@ UNIT_DIR="/etc/systemd/system"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 WIRED_CON="Wired failover"
-WIFI_CON="Motarassed"
+WIFI_CON="WIFI"
 ETH="eth0"
 WLAN="wlan0"
 VIP="192.168.1.14/24"
