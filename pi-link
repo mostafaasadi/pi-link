@@ -1,0 +1,136 @@
+#!/bin/bash
+
+WIRED_CON="Wired failover"
+WIFI_CON="Motarassed"
+ETH="eth0"
+WLAN="wlan0"
+GATEWAY="192.168.1.1"
+VIP="192.168.1.14"
+STATE_FILE="/run/failover.state"
+LOCK_FILE="/run/failover.lock"
+DOWN_NEED=3
+WIFI_DOWN_NEED=3
+SWITCH_COOLDOWN=60
+RECONNECT_COOLDOWN=120
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || exit 0
+
+log() { logger -t wifi-watchdog "$1"; }
+
+now=$(date +%s)
+
+carrier_up() { [[ "$(cat /sys/class/net/$ETH/carrier 2>/dev/null)" == "1" ]]; }
+
+ping_score() {
+    local out
+    out=$(ping -I "$1" -c 3 -W 2 -i 0.5 "$GATEWAY" 2>/dev/null | grep -o '[0-9]* received' | grep -o '[0-9]*')
+    [[ -n "$out" ]] && (( out >= 2 ))
+}
+
+has_vip() { ip -4 addr show dev "$1" 2>/dev/null | grep -q "$VIP/"; }
+
+wifi_radio_on() { nmcli -t -f WIFI radio 2>/dev/null | grep -q enabled; }
+
+ensure_wifi_off() {
+    if nmcli -t -f NAME connection show --active | grep -qx "$WIFI_CON"; then
+        nmcli connection down "$WIFI_CON" >/dev/null 2>&1
+    fi
+    if wifi_radio_on; then
+        nmcli radio wifi off >/dev/null 2>&1
+        log "WiFi radio off (wired healthy)"
+    fi
+}
+
+if [[ -f "$STATE_FILE" ]]; then
+    read -r LAST_SWITCH LAST_RECONNECT DOWN WDOWN < "$STATE_FILE"
+fi
+LAST_SWITCH=${LAST_SWITCH:-0}
+LAST_RECONNECT=${LAST_RECONNECT:-0}
+DOWN=${DOWN:-0}
+WDOWN=${WDOWN:-0}
+
+[[ "$LAST_SWITCH" =~ ^[0-9]+$ ]] || LAST_SWITCH=0
+[[ "$LAST_RECONNECT" =~ ^[0-9]+$ ]] || LAST_RECONNECT=0
+[[ "$DOWN" =~ ^[0-9]+$ ]] || DOWN=0
+[[ "$WDOWN" =~ ^[0-9]+$ ]] || WDOWN=0
+
+save_state() { printf '%s %s %s %s\n' "$LAST_SWITCH" "$LAST_RECONNECT" "$DOWN" "$WDOWN" > "$STATE_FILE"; }
+
+if has_vip "$ETH"; then current="wired"
+elif has_vip "$WLAN"; then current="wifi"
+else current="none"; fi
+
+switch_to_wifi() {
+    (( now - LAST_SWITCH >= SWITCH_COOLDOWN )) || return 1
+    nmcli radio wifi on >/dev/null 2>&1
+    sleep 3
+    if nmcli connection up "$WIFI_CON" >/dev/null 2>&1 && has_vip "$WLAN" && ping_score "$WLAN"; then
+        nmcli connection down "$WIRED_CON" >/dev/null 2>&1
+        LAST_SWITCH=$now; DOWN=0; WDOWN=0
+        log "Failover: $VIP moved to wifi ($WLAN)"
+        return 0
+    fi
+    log "WiFi activation failed"
+    return 1
+}
+
+switch_to_wired() {
+    (( now - LAST_SWITCH >= SWITCH_COOLDOWN )) || return 1
+    if nmcli connection up "$WIRED_CON" >/dev/null 2>&1 && has_vip "$ETH" && ping_score "$ETH"; then
+        nmcli connection down "$WIFI_CON" >/dev/null 2>&1
+        nmcli radio wifi off >/dev/null 2>&1
+        LAST_SWITCH=$now; DOWN=0; WDOWN=0
+        log "Failover: $VIP moved to wired ($ETH); WiFi radio off"
+        return 0
+    fi
+    nmcli connection down "$WIRED_CON" >/dev/null 2>&1
+    log "Wired activation failed"
+    return 1
+}
+
+case "$current" in
+wired)
+    if carrier_up && ping_score "$ETH"; then
+        DOWN=0
+        ensure_wifi_off
+    else
+        DOWN=$((DOWN+1))
+        if (( DOWN >= DOWN_NEED )); then
+            switch_to_wifi || true
+        fi
+    fi
+    ;;
+wifi)
+    if carrier_up; then
+        if switch_to_wired; then
+            save_state
+            exit 0
+        fi
+    fi
+    if ping_score "$WLAN"; then
+        WDOWN=0
+    else
+        WDOWN=$((WDOWN+1))
+        if (( WDOWN >= WIFI_DOWN_NEED )) && (( now - LAST_RECONNECT >= RECONNECT_COOLDOWN )); then
+            log "WiFi path unhealthy; reconnecting"
+            nmcli connection down "$WIFI_CON" >/dev/null 2>&1
+            nmcli connection up "$WIFI_CON" >/dev/null 2>&1
+            LAST_RECONNECT=$now; WDOWN=0
+        fi
+    fi
+    ;;
+none)
+    if carrier_up && nmcli connection up "$WIRED_CON" >/dev/null 2>&1 && has_vip "$ETH" && ping_score "$ETH"; then
+        LAST_SWITCH=$now
+        ensure_wifi_off
+        log "Initial: $VIP on wired ($ETH)"
+    else
+        nmcli connection down "$WIRED_CON" >/dev/null 2>&1
+        switch_to_wifi || true
+    fi
+    ;;
+esac
+
+save_state
+exit 0
