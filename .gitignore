@@ -1,0 +1,4 @@
+/run/pi-link.*
+/etc/pi-link.conf
+*.log
+.DS_Store

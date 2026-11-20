@@ -1,22 +1,16 @@
 #!/bin/bash
 
-WIRED_CON="Wired failover"
-WIFI_CON="WIFI"
-ETH="eth0"
-WLAN="wlan0"
-GATEWAY="192.168.1.1"
-VIP="192.168.1.14"
-STATE_FILE="/run/failover.state"
-LOCK_FILE="/run/failover.lock"
-DOWN_NEED=3
-WIFI_DOWN_NEED=3
-SWITCH_COOLDOWN=60
-RECONNECT_COOLDOWN=120
+CONF="/etc/pi-link.conf"
+[[ -f "$CONF" ]] || { logger -t pi-link "Config missing: $CONF"; exit 1; }
+source "$CONF"
+
+STATE_FILE="/run/pi-link.state"
+LOCK_FILE="/run/pi-link.lock"
 
 exec 9>"$LOCK_FILE"
 flock -n 9 || exit 0
 
-log() { logger -t wifi-watchdog "$1"; }
+log() { logger -t pi-link "$1"; }
 
 now=$(date +%s)
 

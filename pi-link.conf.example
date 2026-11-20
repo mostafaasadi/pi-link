@@ -1,0 +1,26 @@
+# pi-link configuration
+# Copy to /etc/pi-link.conf and edit
+
+# Network interfaces
+ETH="eth0"
+WLAN="wlan0"
+
+# NetworkManager connection profile names
+WIRED_CON="Wired failover"
+WIFI_CON="YOUR_WIFI_PROFILE_NAME"
+
+# Static IP configuration (same on both interfaces)
+VIP="192.168.1.14/24"
+GATEWAY="192.168.1.1"
+DNS="192.168.1.1"
+
+# Failover thresholds
+DOWN_NEED=3
+WIFI_DOWN_NEED=3
+
+# Cooldowns (seconds)
+SWITCH_COOLDOWN=60
+RECONNECT_COOLDOWN=120
+
+# Timer interval (used by install.sh)
+INTERVAL=15
